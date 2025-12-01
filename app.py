@@ -327,48 +327,76 @@ def extract_archive_if_needed(archive_path: str, dest_dir: str) -> bool:
         return False
 
 
-def download_and_install_models(models_url: str, detection_url: str) -> Optional[str]:
+def download_and_install_models(models_url: str, detection_url: str) -> Tuple[bool, str]:
     """Download provided URLs and install into ./models/ and place detection model.
-    Returns a success message or None on failure."""
+    Returns (success: bool, message: str). On failure, message contains an error traceback or reason.
+    Supports local filesystem paths and file:// URLs in addition to HTTP/HTTPS.
+    """
     import shutil
 
     MODEL_DIR_LOCAL = MODEL_DIR
     os.makedirs(MODEL_DIR_LOCAL, exist_ok=True)
 
-    # If models archive URL provided, download and extract
+    # If models archive URL provided, download/extract or copy from local path
     if models_url:
-        tmp_archive = os.path.join(MODEL_DIR_LOCAL, 'models_download.tmp')
-        prog = None
         try:
-            prog = st.progress(0)
-            ok = download_file_stream(models_url, tmp_archive, prog)
-            if not ok:
-                return None
-            extracted = extract_archive_if_needed(tmp_archive, MODEL_DIR_LOCAL)
-            # if extraction failed, maybe the archive is a single model file
-            if not extracted:
-                # move file into models dir preserving name
-                shutil.move(tmp_archive, os.path.join(MODEL_DIR_LOCAL, os.path.basename(models_url)))
+            # handle file:// or local absolute/relative paths without using requests
+            if models_url.startswith('file://'):
+                local_path = models_url[len('file://'):]
             else:
-                os.remove(tmp_archive)
-        finally:
-            if prog:
-                prog.empty()
+                local_path = models_url
 
-    # If detection model URL provided, download it to repo root as best_model.keras
+            if os.path.exists(local_path):
+                # direct local file — if archive, extract; otherwise copy into models dir
+                if extract_archive_if_needed(local_path, MODEL_DIR_LOCAL):
+                    pass
+                else:
+                    shutil.copy(local_path, os.path.join(MODEL_DIR_LOCAL, os.path.basename(local_path)))
+            else:
+                tmp_archive = os.path.join(MODEL_DIR_LOCAL, 'models_download.tmp')
+                prog = None
+                try:
+                    prog = st.progress(0)
+                    ok = download_file_stream(models_url, tmp_archive, prog)
+                    if not ok:
+                        return False, f"Failed to download models archive from {models_url}"
+                    extracted = extract_archive_if_needed(tmp_archive, MODEL_DIR_LOCAL)
+                    # if extraction failed, maybe the archive is a single model file
+                    if not extracted:
+                        # move file into models dir preserving name
+                        shutil.move(tmp_archive, os.path.join(MODEL_DIR_LOCAL, os.path.basename(models_url)))
+                    else:
+                        os.remove(tmp_archive)
+                finally:
+                    if prog:
+                        prog.empty()
+        except Exception:
+            return False, traceback.format_exc()
+
+    # If detection model URL provided, download or copy it to repo root as best_model.keras
     if detection_url:
-        target = os.path.join('.', 'best_model.keras')
-        prog2 = None
         try:
-            prog2 = st.progress(0)
-            ok2 = download_file_stream(detection_url, target, prog2)
-            if not ok2:
-                return None
-        finally:
-            if prog2:
-                prog2.empty()
+            if detection_url.startswith('file://'):
+                local_det = detection_url[len('file://'):]
+            else:
+                local_det = detection_url
 
-    return "Models installed — restart the app or click 'Load detection model now' and 'Load GPT-2 model now'"
+            target = os.path.join('.', 'best_model.keras')
+            if os.path.exists(local_det):
+                shutil.copy(local_det, target)
+            else:
+                prog2 = None
+                try:
+                    prog2 = st.progress(0)
+                    ok2 = download_file_stream(detection_url, target, prog2)
+                    if not ok2:
+                        return False, f"Failed to download detection model from {detection_url}"
+                finally:
+                    if prog2:
+                        prog2.empty()
+        except Exception:
+            return False, traceback.format_exc()
+    return True, "Models installed — restart the app or click 'Load detection model now' and 'Load GPT-2 model now'"
 
 
 def predict_image(model, img: Image.Image, class_names: List[str]) -> Tuple[str, float]:
@@ -539,11 +567,12 @@ def main():
         if st.button("Download & install models"):
             # perform download and extraction
             with st.spinner("Downloading and installing models..."):
-                msg = download_and_install_models(models_url.strip(), detection_url.strip())
-                if msg:
+                ok, msg = download_and_install_models(models_url.strip(), detection_url.strip())
+                if ok:
                     st.success(msg)
                 else:
-                    st.error("Download/install failed — check the URL and server logs.")
+                    st.error("Download/install failed — see error below")
+                    st.code(msg)
         st.markdown("---")
         st.write("Server info")
         st.write(f"Detection model: {'loaded' if st.session_state['detection_model'] is not None else 'not loaded'}")
