@@ -181,6 +181,97 @@ def preprocess_image_for_model(img: Image.Image) -> np.ndarray:
     return np.expand_dims(arr, axis=0)
 
 
+def download_file_stream(url: str, target_path: str, progress_st=None) -> bool:
+    try:
+        import requests
+        from math import floor
+        resp = requests.get(url, stream=True, timeout=30)
+        resp.raise_for_status()
+        total = resp.headers.get('content-length')
+        if total is None:
+            # unknown size
+            with open(target_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            if progress_st:
+                progress_st.progress(100)
+            return True
+        total = int(total)
+        dl = 0
+        with open(target_path, 'wb') as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    dl += len(chunk)
+                    if progress_st:
+                        progress_st.progress(min(floor(dl * 100 / total), 100))
+        return True
+    except Exception:
+        return False
+
+
+def extract_archive_if_needed(archive_path: str, dest_dir: str) -> bool:
+    try:
+        import zipfile, tarfile
+        if zipfile.is_zipfile(archive_path):
+            with zipfile.ZipFile(archive_path, 'r') as z:
+                z.extractall(dest_dir)
+            return True
+        if tarfile.is_tarfile(archive_path):
+            with tarfile.open(archive_path, 'r:*') as t:
+                t.extractall(dest_dir)
+            return True
+        # Not an archive; maybe a model file
+        return False
+    except Exception:
+        return False
+
+
+def download_and_install_models(models_url: str, detection_url: str) -> Optional[str]:
+    """Download provided URLs and install into ./models/ and place detection model.
+    Returns a success message or None on failure."""
+    import shutil
+
+    MODEL_DIR_LOCAL = MODEL_DIR
+    os.makedirs(MODEL_DIR_LOCAL, exist_ok=True)
+
+    # If models archive URL provided, download and extract
+    if models_url:
+        tmp_archive = os.path.join(MODEL_DIR_LOCAL, 'models_download.tmp')
+        prog = None
+        try:
+            prog = st.progress(0)
+            ok = download_file_stream(models_url, tmp_archive, prog)
+            if not ok:
+                return None
+            extracted = extract_archive_if_needed(tmp_archive, MODEL_DIR_LOCAL)
+            # if extraction failed, maybe the archive is a single model file
+            if not extracted:
+                # move file into models dir preserving name
+                shutil.move(tmp_archive, os.path.join(MODEL_DIR_LOCAL, os.path.basename(models_url)))
+            else:
+                os.remove(tmp_archive)
+        finally:
+            if prog:
+                prog.empty()
+
+    # If detection model URL provided, download it to repo root as best_model.keras
+    if detection_url:
+        target = os.path.join('.', 'best_model.keras')
+        prog2 = None
+        try:
+            prog2 = st.progress(0)
+            ok2 = download_file_stream(detection_url, target, prog2)
+            if not ok2:
+                return None
+        finally:
+            if prog2:
+                prog2.empty()
+
+    return "Models installed — restart the app or click 'Load detection model now' and 'Load GPT-2 model now'"
+
+
 def predict_image(model, img: Image.Image, class_names: List[str]) -> Tuple[str, float]:
     x = preprocess_image_for_model(img)
     preds = model.predict(x, verbose=0)
@@ -326,6 +417,19 @@ def main():
         st.subheader("Demo options")
         sample_count = st.slider("Sample gallery size", 3, 30, 12)
         st.checkbox("Show sample gallery", value=True, key='show_gallery')
+        st.markdown("---")
+        st.subheader("Models downloader")
+        st.write("If your deployment does not include model files, paste a direct download URL below (zip or tar) and click Install.")
+        models_url = st.text_input("Models archive URL (zip/tar)", value="", help="Public direct link to a models archive containing tokenizer/model folders or best_model.keras")
+        detection_url = st.text_input("Detection model file URL (optional)", value="", help="Direct link to best_model.keras or Keras .h5 file")
+        if st.button("Download & install models"):
+            # perform download and extraction
+            with st.spinner("Downloading and installing models..."):
+                msg = download_and_install_models(models_url.strip(), detection_url.strip())
+                if msg:
+                    st.success(msg)
+                else:
+                    st.error("Download/install failed — check the URL and server logs.")
         st.markdown("---")
         st.write("Server info")
         st.write(f"Detection model: {'loaded' if st.session_state['detection_model'] is not None else 'not loaded'}")
