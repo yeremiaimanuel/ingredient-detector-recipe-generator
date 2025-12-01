@@ -1,0 +1,41 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+.env
+
+# Packaging
+*.egg-info/
+pip-wheel-metadata/
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models and large weights (do not commit large model files)
+models/
+best_model.keras
+*.h5
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+
+# Streamlit runtime
+.streamlit/
+
+# Logs and misc
+*.log
+*.sqlite3
