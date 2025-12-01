@@ -688,7 +688,19 @@ def main():
                         st.image(p, caption=os.path.basename(p), use_container_width=True)
                         if st.button(f"Use this image", key=f"use_{i}"):
                             st.session_state['demo_image_path'] = p
-                            st.experimental_rerun()
+                            # Use experimental_rerun when available; otherwise trigger a rerun
+                            try:
+                                if hasattr(st, 'experimental_rerun'):
+                                    st.experimental_rerun()
+                                else:
+                                    # Fallback: change a query param to force rerun
+                                    st.experimental_set_query_params(_rerun=int(time.time()))
+                            except Exception:
+                                try:
+                                    st.experimental_set_query_params(_rerun=int(time.time()))
+                                except Exception:
+                                    # Last resort: no-op (user can manually refresh)
+                                    pass
             else:
                 st.info("No sample images to show.")
 
