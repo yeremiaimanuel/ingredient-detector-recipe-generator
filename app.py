@@ -74,8 +74,13 @@ def try_load_gpt2():
     tokenizer_files = {"tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "special_tokens_map.json"}
     model_files = {"pytorch_model.bin", "tf_model.h5", "model.safetensors"}
 
-    # list subdirectories
-    subdirs = [os.path.join(MODEL_DIR, d) for d in os.listdir(MODEL_DIR) if os.path.isdir(os.path.join(MODEL_DIR, d))]
+    # list subdirectories (guard if MODEL_DIR is missing)
+    if not os.path.exists(MODEL_DIR) or not os.path.isdir(MODEL_DIR):
+        return None, None
+    try:
+        subdirs = [os.path.join(MODEL_DIR, d) for d in os.listdir(MODEL_DIR) if os.path.isdir(os.path.join(MODEL_DIR, d))]
+    except Exception:
+        return None, None
     tokenizer_dirs = []
     model_dirs = []
     for sd in subdirs:
