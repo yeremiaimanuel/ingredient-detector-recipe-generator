@@ -1,6 +1,7 @@
 import os
 import time
 import pickle
+import traceback
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -124,33 +125,131 @@ def try_load_gpt2():
     return None, None
 
 
+def try_load_gpt2_verbose():
+    """Verbose GPT-2 loader that returns (tokenizer, model, error_str).
+    Useful in deployed environments to capture error tracebacks."""
+    try:
+        from transformers import GPT2LMHeadModel, GPT2Tokenizer
+    except Exception:
+        return None, None, traceback.format_exc()
+
+    tokenizer_files = {"tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "special_tokens_map.json"}
+    model_files = {"pytorch_model.bin", "tf_model.h5", "model.safetensors"}
+
+    if not os.path.exists(MODEL_DIR) or not os.path.isdir(MODEL_DIR):
+        return None, None, f"MODEL_DIR '{MODEL_DIR}' not found"
+    try:
+        subdirs = [os.path.join(MODEL_DIR, d) for d in os.listdir(MODEL_DIR) if os.path.isdir(os.path.join(MODEL_DIR, d))]
+    except Exception:
+        return None, None, traceback.format_exc()
+
+    tokenizer_dirs = []
+    model_dirs = []
+    for sd in subdirs:
+        try:
+            files = set(os.listdir(sd))
+        except Exception:
+            files = set()
+        if files & tokenizer_files:
+            tokenizer_dirs.append(sd)
+        if files & model_files:
+            model_dirs.append(sd)
+
+    # Prefer explicit tokenizer + model pair
+    if tokenizer_dirs and model_dirs:
+        for td in tokenizer_dirs:
+            for md in model_dirs:
+                try:
+                    tokenizer = GPT2Tokenizer.from_pretrained(td)
+                    model = GPT2LMHeadModel.from_pretrained(md)
+                    if tokenizer.pad_token is None:
+                        tokenizer.pad_token = tokenizer.eos_token
+                    if getattr(model.config, 'pad_token_id', None) is None:
+                        model.config.pad_token_id = tokenizer.eos_token_id
+                    return tokenizer, model, None
+                except Exception:
+                    err = traceback.format_exc()
+                    return None, None, err
+
+    for d in GPT2_MODEL_DIRS:
+        if os.path.exists(d) and os.path.isdir(d):
+            try:
+                tokenizer = GPT2Tokenizer.from_pretrained(d)
+                model = GPT2LMHeadModel.from_pretrained(d)
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+                if getattr(model.config, 'pad_token_id', None) is None:
+                    model.config.pad_token_id = tokenizer.eos_token_id
+                return tokenizer, model, None
+            except Exception:
+                return None, None, traceback.format_exc()
+    return None, None, f"No tokenizer/model found under {MODEL_DIR}"
+
+
+def load_detection_model_verbose():
+    """Load detection model and return (model, error_str).
+    This exposes tracebacks to help debugging in hosted deployments."""
+    try:
+        import tensorflow as tf
+        from tensorflow.keras.models import load_model
+    except Exception:
+        return None, traceback.format_exc()
+
+    for p in DEFAULT_DETECTION_MODEL_PATHS:
+        if os.path.exists(p):
+            try:
+                model = load_model(p)
+                return model, None
+            except Exception:
+                return None, traceback.format_exc()
+    return None, f"No detection model found in paths: {DEFAULT_DETECTION_MODEL_PATHS}"
+
+
 def load_models_on_start():
     """Attempt to load detection model, class names and GPT-2 at startup."""
-    # Load only the detection model and class names at startup to avoid blocking UI
-    detection_model = load_detection_model()
-    class_names = load_class_names()
+    # Attempt auto-download in deployed environments if env vars provided
+    try:
+        model_archive_url = os.environ.get('MODEL_ARCHIVE_URL')
+        detection_url = os.environ.get('DETECTION_MODEL_URL')
+        need_models = not (os.path.exists('best_model.keras') or os.path.exists(MODEL_DIR))
+        if (model_archive_url or detection_url) and need_models:
+            try:
+                download_and_install_models(model_archive_url or '', detection_url or '')
+            except Exception:
+                # swallow here; verbose loader will show errors
+                pass
+    except Exception:
+        pass
 
-    # Save to session state
+    # Load only the detection model and class names at startup to avoid blocking UI
+    class_names = load_class_names()
+    detection_model, det_err = load_detection_model_verbose()
+
+    # Save to session state with error details for diagnosis
     st.session_state['detection_model'] = detection_model
+    st.session_state['detection_load_error'] = det_err
     st.session_state['class_names'] = class_names
     # GPT-2 remains unloaded until user requests it
     st.session_state['tokenizer'] = None
     st.session_state['gpt2_model'] = None
     st.session_state['gpt2_sample'] = None
+    st.session_state['gpt2_load_error'] = None
 
 
 def load_gpt2_on_demand():
     """Load GPT-2 model when requested by user and produce a short sample."""
-    tokenizer, gpt2_model = try_load_gpt2()
+    tokenizer, gpt2_model, err = try_load_gpt2_verbose()
     st.session_state['tokenizer'] = tokenizer
     st.session_state['gpt2_model'] = gpt2_model
+    st.session_state['gpt2_load_error'] = err
     gpt2_sample = None
+
     if tokenizer is not None and gpt2_model is not None:
         try:
             import torch
             device = torch.device('cpu')
             gpt2_model.to(device)
-            prompt = '[INGREDIENT: chicken]\\nRecipe Name:'
+            prompt = '[INGREDIENT: chicken]\nRecipe Name:'
             input_ids = tokenizer.encode(prompt, return_tensors='pt').to(device)
             outputs = gpt2_model.generate(
                 input_ids,
@@ -384,6 +483,15 @@ def main():
     if 'demo_image_path' not in st.session_state:
         st.session_state['demo_image_path'] = None
 
+    # If deployment provides model URLs via env vars, attempt to auto-install/load once
+    try:
+        env_models = os.environ.get('MODEL_ARCHIVE_URL') or os.environ.get('DETECTION_MODEL_URL')
+        if env_models and st.session_state.get('detection_model') is None:
+            # this will attempt download (if needed) and load, storing errors in session_state
+            load_models_on_start()
+    except Exception:
+        pass
+
     # Sidebar controls
     with st.sidebar:
         st.header("Controls")
@@ -405,6 +513,9 @@ def main():
                 st.success("Detection model loaded")
             else:
                 st.error("Detection model failed to load. Check `best_model.keras` or MODEL_DIR.")
+                if st.session_state.get('detection_load_error'):
+                    st.subheader('Detection load error (trace)')
+                    st.code(st.session_state.get('detection_load_error'))
         if st.button("Load GPT-2 model now (on-demand)"):
             with st.spinner("Loading GPT-2 (this may take a while)..."):
                 load_gpt2_on_demand()
@@ -412,6 +523,9 @@ def main():
                 st.success("GPT-2 model loaded")
             else:
                 st.error("GPT-2 failed to load. Check model folder or dependencies.")
+                if st.session_state.get('gpt2_load_error'):
+                    st.subheader('GPT-2 load error (trace)')
+                    st.code(st.session_state.get('gpt2_load_error'))
 
         st.markdown("---")
         st.subheader("Demo options")
