@@ -693,11 +693,16 @@ def main():
                                 if hasattr(st, 'experimental_rerun'):
                                     st.experimental_rerun()
                                 else:
-                                    # Fallback: change a query param to force rerun
-                                    st.experimental_set_query_params(_rerun=int(time.time()))
+                                    # Fallback: change a query param to force rerun using new API
+                                    # `st.query_params` is the recommended way to set query params.
+                                    try:
+                                        st.query_params = {"_rerun": str(int(time.time()))}
+                                    except Exception:
+                                        # last-resort attempt using string assign
+                                        st.query_params = {"_rerun": str(int(time.time()))}
                             except Exception:
                                 try:
-                                    st.experimental_set_query_params(_rerun=int(time.time()))
+                                    st.query_params = {"_rerun": str(int(time.time()))}
                                 except Exception:
                                     # Last resort: no-op (user can manually refresh)
                                     pass
