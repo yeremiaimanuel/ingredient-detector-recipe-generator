@@ -23,6 +23,10 @@ GPT2_MODEL_DIRS = [
     os.path.join(MODEL_DIR, "gpt2_recipe_checkpoints"),
 ]
 
+# Official hosted model URLs (Hugging Face) — convenient defaults for downloader
+HF_DETECTION_MODEL_URL = "https://huggingface.co/yeremiaimanuels/food-recipe-assistant/resolve/main/best_model.keras"
+HF_MODELS_ARCHIVE_URL = "https://huggingface.co/yeremiaimanuels/food-recipe-assistant/resolve/main/gpt2_recipe_model.zip"
+
 
 @st.cache_resource
 def load_detection_model() -> Optional[object]:
@@ -564,6 +568,16 @@ def main():
         st.write("If your deployment does not include model files, paste a direct download URL below (zip or tar) and click Install.")
         models_url = st.text_input("Models archive URL (zip/tar)", value="", help="Public direct link to a models archive containing tokenizer/model folders or best_model.keras")
         detection_url = st.text_input("Detection model file URL (optional)", value="", help="Direct link to best_model.keras or Keras .h5 file")
+        st.markdown("---")
+        st.write("Or install the hosted models from Hugging Face:")
+        if st.button("Install official Hugging Face models"):
+            with st.spinner("Downloading official models from Hugging Face..."):
+                ok, msg = download_and_install_models(HF_MODELS_ARCHIVE_URL, HF_DETECTION_MODEL_URL)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error("Download/install failed — see error below")
+                    st.code(msg)
         if st.button("Download & install models"):
             # perform download and extraction
             with st.spinner("Downloading and installing models..."):
